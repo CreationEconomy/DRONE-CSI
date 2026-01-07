@@ -57,6 +57,51 @@ python /home/clip968/Desktop/programming/DRONE-CSI/visualize_csi.py
 python /home/clip968/Desktop/programming/DRONE-CSI/csi\ 저장.py
 ```
 
+### (추가) 라벨 수집 + 머신러닝 베이스라인(벽/장애물 근접 “분류”)
+ESP32가 **고정(땅/PC 옆)**이고 드론이 이동하는 상황에서는, CSI로 “벽까지 절대거리”를 바로 계산하기보다  
+**근접/비근접(또는 거리 구간)을 라벨링해서 분류**하는 접근이 현실적으로 잘 됩니다.
+
+#### 1) 라벨 수집(.npz)
+아래 스크립트는 CSI 패킷을 수집하면서, 터미널에서 라벨을 입력하면(예: `near`, `far`) 이후 패킷에 그 라벨을 붙여 저장합니다.
+
+```bash
+python /home/clip968/Desktop/programming/DRONE-CSI/record_labeled_csi.py \
+  --port /dev/ttyUSB0 \
+  --baud 921600 \
+  --target-mac <TELLO_BSSID> \
+  --out tello_wall_nearfar_01.npz
+```
+
+- **`<TELLO_BSSID>`는 예시입니다. 그대로 쓰면 안 됩니다.**
+  - `visualize_csi.py`에서 `TARGET_MAC=None`로 돌렸을 때 상단에 뜨는 `last: XX:XX:...`를 복사하거나
+  - `nmcli dev wifi`에서 `TELLO-...`의 `BSSID`를 확인해 넣으세요.
+- 처음엔 `--target-mac`을 **생략(=ANY)**해서 돌려도 되지만, 주변 WiFi가 섞이면 학습이 망가질 수 있어 **가능하면 필터링을 권장**합니다.
+
+- **라벨 입력**: 실행 후 `near`/`far` 같은 문자열을 입력하고 Enter  
+- **종료**: `q` 입력
+
+권장 라벨링 팁:
+- “근접”을 예: **벽 0.5m 이내**처럼 명확히 정의
+- 비행 패턴(고도/속도/경로)을 최대한 일정하게 유지(드론 자체 움직임이 CSI에 크게 영향)
+- 세션을 여러 번(파일 여러 개) 쌓아서 학습/검증을 “파일 단위”로 나누기
+
+#### 2) 베이스라인 학습
+수집한 `.npz`를 윈도우(예: 80패킷)로 잘라 특징을 만들고 분류기를 학습합니다.
+여러 파일을 넣으면, **파일 단위로 train/test를 분리**합니다.
+
+```bash
+python /home/clip968/Desktop/programming/DRONE-CSI/train_wall_proximity_baseline.py \
+  --inputs tello_wall_nearfar_01.npz tello_wall_nearfar_02.npz \
+  --window 80 --step 20 \
+  --model rf \
+  --out wall_model.joblib
+```
+
+필요 패키지(예시):
+```bash
+pip install -U pyserial numpy matplotlib scikit-learn joblib
+```
+
 #### 중요: MAC 필터(TARGET_MAC)
 `visualize_csi.py`, `csi 저장.py`는 이제 **기본값이 `TARGET_MAC = None`(필터 해제)**입니다.  
 특정 드론만 보고 싶으면, ESP32 로그에 찍힌 `BSSID`(또는 `nmcli dev wifi`의 BSSID)를 `TARGET_MAC`에 넣으세요.

@@ -8,3 +8,4 @@ ESP 설정 수정: idf.py menuconfig
 ESP에 권환 부여(플래싱 위해): sudo chmod 666 /dev/ttyUSB0
 빌드 및 플래싱: idf.py -p /dev/ttyUSB0 build flash monitor
 set -gx TERM xterm-256color
+60:60:1F:FD:0A:5B
