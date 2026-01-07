@@ -1,0 +1,20 @@
+{
+    "project_name":       "bootloader",
+    "project_path":       "/home/clip968/esp-idf-v4.3/components/bootloader/subproject",
+    "build_dir":          "/home/clip968/Desktop/programming/esp32-csi-tool/active_sta/build/bootloader",
+    "config_file":        "/home/clip968/Desktop/programming/esp32-csi-tool/active_sta/sdkconfig",
+    "config_defaults":    "",
+    "app_elf":            "bootloader.elf",
+    "app_bin":            "bootloader.bin",
+    "git_revision":       "v4.3-dirty",
+    "target":             "esp32",
+    "phy_data_partition": "",
+    "monitor_baud" :      "921600",
+    "monitor_toolprefix": "xtensa-esp32-elf-",
+    "config_environment" : {
+        "COMPONENT_KCONFIGS" : "/home/clip968/esp-idf-v4.3/components/efuse/Kconfig;/home/clip968/esp-idf-v4.3/components/esp32/Kconfig;/home/clip968/esp-idf-v4.3/components/esp_common/Kconfig;/home/clip968/esp-idf-v4.3/components/esp_system/Kconfig;/home/clip968/esp-idf-v4.3/components/log/Kconfig;/home/clip968/esp-idf-v4.3/components/newlib/Kconfig;/home/clip968/esp-idf-v4.3/components/spi_flash/Kconfig",
+        "COMPONENT_KCONFIGS_PROJBUILD" : "/home/clip968/esp-idf-v4.3/components/bootloader/Kconfig.projbuild;/home/clip968/esp-idf-v4.3/components/esptool_py/Kconfig.projbuild;/home/clip968/esp-idf-v4.3/components/partition_table/Kconfig.projbuild"
+    },
+    "build_components" : [ "bootloader", "bootloader_support", "efuse", "esp32", "esp_common", "esp_hw_support", "esp_rom", "esp_system", "esptool_py", "hal", "log", "main", "micro-ecc", "newlib", "partition_table", "soc", "spi_flash", "xtensa", "" ],
+    "build_component_paths" : [ "/home/clip968/esp-idf-v4.3/components/bootloader", "/home/clip968/esp-idf-v4.3/components/bootloader_support", "/home/clip968/esp-idf-v4.3/components/efuse", "/home/clip968/esp-idf-v4.3/components/esp32", "/home/clip968/esp-idf-v4.3/components/esp_common", "/home/clip968/esp-idf-v4.3/components/esp_hw_support", "/home/clip968/esp-idf-v4.3/components/esp_rom", "/home/clip968/esp-idf-v4.3/components/esp_system", "/home/clip968/esp-idf-v4.3/components/esptool_py", "/home/clip968/esp-idf-v4.3/components/hal", "/home/clip968/esp-idf-v4.3/components/log", "/home/clip968/esp-idf-v4.3/components/bootloader/subproject/main", "/home/clip968/esp-idf-v4.3/components/bootloader/subproject/components/micro-ecc", "/home/clip968/esp-idf-v4.3/components/newlib", "/home/clip968/esp-idf-v4.3/components/partition_table", "/home/clip968/esp-idf-v4.3/components/soc", "/home/clip968/esp-idf-v4.3/components/spi_flash", "/home/clip968/esp-idf-v4.3/components/xtensa", "" ]
+}
