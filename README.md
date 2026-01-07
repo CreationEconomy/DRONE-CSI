@@ -113,3 +113,7 @@ pip install -U pyserial numpy matplotlib scikit-learn joblib
   - **거리/안테나**: 드론 가까이에서 테스트(초기엔 0.5~2m 권장)
 - **부팅/재연결이 느림**
   - 현재 코드는 `TELLO-` **Fast Active Scan(30~60ms/ch)**로 채널을 빠르게 잡도록 되어 있어야 함
+## 공식라이브러리
+URL: https://github.com/espressif/esp-csi/tree/master
+설치법: git clone --recursive https://github.com/espressif/esp-csi.git
+examples/get-started/csi_recv_router 디렉토리에서 플래싱 ㄱㄱㄱ
