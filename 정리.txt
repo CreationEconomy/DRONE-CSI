@@ -1,0 +1,7 @@
+휴대폰 MAC주소: "FA:29:AA:6F:BF:24"
+
+노트북 기준 와이파이 검색: nmcli dev wifi
+ESP 설정 수정: idf.py menuconfig
+연결확인(밑에 명령어 이거 기준으로 수정): ls /dev/ttyUSB*
+ESP에 권환 부여(플래싱 위해): sudo chmod 666 /dev/ttyUSB0
+빌드 및 플래싱: idf.py -p /dev/ttyUSB0 build flash monitor
