@@ -57,6 +57,40 @@ python /home/clip968/Desktop/programming/DRONE-CSI/visualize_csi.py
 python /home/clip968/Desktop/programming/DRONE-CSI/csi\ 저장.py
 ```
 
+### Drone-CSI-Sense (Deep Learning Edition: Time-Series 1D-CNN)
+기존 “단일 패킷 스냅샷 + 특징 공학” 방식 대신, **시간 흐름(Window) 기반**으로 `Hover(0)` vs `Wall Close(1)`를 분류합니다.
+
+핵심 파이프라인(현재 코드 기준):
+- **Raw 입력**: CSV의 `data`는 보통 **I/Q 128개**(=64쌍)입니다.
+- **차원 축소**: `I/Q 128 -> 진폭 64`로 변환(`tscnn.iq128_to_amp64`)
+- **윈도우**: `Window=20 frames`, `Stride(train)=5`, `Stride(infer)=1`
+- **모델 입력 텐서**: `(Batch, Channels, Length) = (N, 64, 20)`
+- **후처리(안정화)**: 최근 3번 예측이 모두 `Wall(1)`일 때만 최종 “벽 경고” 출력
+
+#### 1) 학습(Time-Series 1D-CNN)
+아래는 현재 포함된 CSV(`공중 호버.csv`, `벽 가까이.csv`)로 학습하는 기본 예시입니다.
+
+```bash
+python /home/clip968/Desktop/programming/DRONE-CSI/train_save.py \
+  --hover_csv "공중 호버.csv" \
+  --wall_csv "벽 가까이.csv" \
+  --out csi_model_tscnn.pt
+```
+
+#### 2) 실시간 추론(Stride=1 + Deque 20 + 3연속 Wall 스무딩)
+UI(그래프)와 함께 “벽 경고” 상태를 표시합니다.
+
+```bash
+python /home/clip968/Desktop/programming/DRONE-CSI/realtime_detect.py \
+  -p /dev/ttyUSB0 \
+  -m csi_model_tscnn.pt
+```
+
+#### 필요 패키지(예시)
+```bash
+pip install -U numpy pandas pyserial pyqt5 pyqtgraph torch
+```
+
 ### (추가) 라벨 수집 + 머신러닝 베이스라인(벽/장애물 근접 “분류”)
 ESP32가 **고정(땅/PC 옆)**이고 드론이 이동하는 상황에서는, CSI로 “벽까지 절대거리”를 바로 계산하기보다  
 **근접/비근접(또는 거리 구간)을 라벨링해서 분류**하는 접근이 현실적으로 잘 됩니다.
@@ -68,14 +102,9 @@ ESP32가 **고정(땅/PC 옆)**이고 드론이 이동하는 상황에서는, CS
 python /home/clip968/Desktop/programming/DRONE-CSI/record_labeled_csi.py \
   --port /dev/ttyUSB0 \
   --baud 921600 \
-  --target-mac <TELLO_BSSID> \
+  --target-mac AA:BB:CC:DD:EE:FF \
   --out tello_wall_nearfar_01.npz
 ```
-
-- **`<TELLO_BSSID>`는 예시입니다. 그대로 쓰면 안 됩니다.**
-  - `visualize_csi.py`에서 `TARGET_MAC=None`로 돌렸을 때 상단에 뜨는 `last: XX:XX:...`를 복사하거나
-  - `nmcli dev wifi`에서 `TELLO-...`의 `BSSID`를 확인해 넣으세요.
-- 처음엔 `--target-mac`을 **생략(=ANY)**해서 돌려도 되지만, 주변 WiFi가 섞이면 학습이 망가질 수 있어 **가능하면 필터링을 권장**합니다.
 
 - **라벨 입력**: 실행 후 `near`/`far` 같은 문자열을 입력하고 Enter  
 - **종료**: `q` 입력
@@ -113,7 +142,3 @@ pip install -U pyserial numpy matplotlib scikit-learn joblib
   - **거리/안테나**: 드론 가까이에서 테스트(초기엔 0.5~2m 권장)
 - **부팅/재연결이 느림**
   - 현재 코드는 `TELLO-` **Fast Active Scan(30~60ms/ch)**로 채널을 빠르게 잡도록 되어 있어야 함
-## 공식라이브러리
-- URL: https://github.com/espressif/esp-csi/tree/master
-- 설치법: git clone --recursive https://github.com/espressif/esp-csi.git
-- examples/get-started/csi_recv_router 디렉토리에서 플래싱 ㄱㄱㄱ

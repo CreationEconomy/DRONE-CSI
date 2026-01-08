@@ -5,12 +5,10 @@ import sys
 import csv
 import json
 import argparse
-import pandas as pd
 import numpy as np
-import joblib
 import serial
-import scipy.stats as stats  # 특징 추출용
-from collections import deque, Counter
+import torch
+from collections import deque
 from io import StringIO
 
 from PyQt5.Qt import *
@@ -19,6 +17,8 @@ import pyqtgraph as pg
 from pyqtgraph import ScatterPlotItem
 from PyQt5 import QtCore
 from PyQt5.QtCore import pyqtSignal, QThread
+
+from tscnn import TSCNNConfig, iq128_to_amp64, load_tscnn_checkpoint
 
 # --- 글로벌 변수 ---
 latest_raw_data = None
@@ -34,30 +34,10 @@ csi_data_complex = np.zeros([CSI_DATA_INDEX, CSI_DATA_COLUMNS], dtype=np.complex
 agc_gain_data = np.zeros([CSI_DATA_INDEX], dtype=np.float64)
 fft_gain_data = np.zeros([CSI_DATA_INDEX], dtype=np.float64)
 
-# ==========================================
-# [핵심] 특징 추출 함수 (학습 코드와 동일해야 함)
-# ==========================================
-def extract_features(csi_list):
-    if len(csi_list) == 0: return [0]*9
-    data = np.array(csi_list)
-    
-    mean_val = np.mean(data)
-    std_val = np.std(data)
-    max_val = np.max(data)
-    min_val = np.min(data)
-    range_val = max_val - min_val
-    skew_val = stats.skew(data)
-    kurt_val = stats.kurtosis(data)
-    q75, q25 = np.percentile(data, [75 ,25])
-    iqr = q75 - q25
-    energy = np.sum(data ** 2) / len(data)
-    
-    return [mean_val, std_val, max_val, min_val, range_val, skew_val, kurt_val, iqr, energy]
-
 class csi_data_graphical_window(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Advanced CSI Detector (Feature Engineering)")
+        self.setWindowTitle("Drone-CSI-Sense (Time-Series 1D-CNN)")
         self.resize(1280, 900)
 
         # 레이아웃 설정
@@ -74,19 +54,9 @@ class csi_data_graphical_window(QWidget):
         graph_layout = QGridLayout()
         main_layout.addLayout(graph_layout)
 
-        # 모델 로드
-        try:
-            self.model = joblib.load('csi_model_advanced.pkl')
-            self.model_loaded = True
-            self.status_label.setText("READY: Waiting for Signal...")
-            print("모델 로드 성공: csi_model_advanced.pkl")
-        except Exception as e:
-            print(f"모델 로드 실패: {e}")
-            self.status_label.setText("Model Error!")
-            self.model_loaded = False
-        
-        # [안정화] 예측값 버퍼 (최근 15개 투표)
-        self.prediction_buffer = deque(maxlen=15)
+        # Time-Series CNN 설정(지시서 스펙)
+        self.cfg = TSCNNConfig()
+        self.model_loaded = False  # SerialThread에서 로드 후 signal로 알려줌
 
         # 그래프 위젯들
         self.plot_phase = PlotWidget(title="Phase (Last Frame)")
@@ -118,49 +88,84 @@ class csi_data_graphical_window(QWidget):
     def update_colors(self, colors):
         self.iq_colors = colors
 
+    def on_model_status(self, payload: object):
+        """
+        SerialThread에서 모델 로드 성공/실패를 알려줍니다.
+        payload 예:
+          {"ok": True, "model_path": "...", "cfg": {...}}
+          {"ok": False, "error": "..."}
+        """
+        try:
+            p = dict(payload) if isinstance(payload, dict) else {}
+        except Exception:
+            p = {}
+
+        ok = bool(p.get("ok", False))
+        if ok:
+            self.model_loaded = True
+            self.status_label.setText(f"READY: Buffer 0/{self.cfg.window_size}")
+            self.status_label.setStyleSheet(
+                "background-color: #333; color: white; font-size: 32px; font-weight: bold; border: 4px solid gray; qproperty-alignment: AlignCenter;"
+            )
+            print(f"모델 로드 성공: {p.get('model_path', '')}")
+        else:
+            self.model_loaded = False
+            err = str(p.get("error", "unknown error"))
+            self.status_label.setText(f"Model Error!\n{err}")
+            self.status_label.setStyleSheet(
+                "background-color: #550000; color: white; font-size: 20px; font-weight: bold; border: 4px solid yellow; qproperty-alignment: AlignCenter;"
+            )
+            print(f"모델 로드 실패: {err}")
+
+    def on_prediction(self, payload: object):
+        """
+        SerialThread에서 매 패킷(Stride=1) 추론 결과를 전달합니다.
+        payload 예:
+          {"buffer_len": 7, "window_size": 20, "warming_up": True}
+          {"buffer_len": 20, "window_size": 20, "pred": 1, "wall_prob": 0.93, "wall_warning": True}
+        """
+        if not self.model_loaded:
+            return
+        try:
+            p = dict(payload) if isinstance(payload, dict) else {}
+        except Exception:
+            return
+
+        buf = int(p.get("buffer_len", 0))
+        win = int(p.get("window_size", self.cfg.window_size))
+        if p.get("warming_up", False) or ("pred" not in p):
+            self.status_label.setText(f"READY: Buffer {buf}/{win}")
+            return
+
+        wall_prob = float(p.get("wall_prob", 0.0))
+        wall_warning = bool(p.get("wall_warning", False))
+        wall_pct = wall_prob * 100.0
+
+        if wall_warning:
+            self.status_label.setText(f"🧱 벽 경고! (3연속)\nWall {wall_pct:.0f}%")
+            self.status_label.setStyleSheet(
+                "background-color: #DD0000; color: white; font-size: 32px; font-weight: bold; border: 4px solid yellow; qproperty-alignment: AlignCenter;"
+            )
+        else:
+            self.status_label.setText(f"🛸 안전 호버링\nWall {wall_pct:.0f}%")
+            self.status_label.setStyleSheet(
+                "background-color: #008800; color: white; font-size: 32px; font-weight: bold; border: 4px solid white; qproperty-alignment: AlignCenter;"
+            )
+
     def update_ui(self):
-        # ==========================================
-        # [핵심] 실시간 예측 로직
-        # ==========================================
-        global latest_raw_data
-        
-        if self.model_loaded and latest_raw_data is not None:
-            raw_list = latest_raw_data
-            
-            # 128 서브캐리어인 경우만 처리
-            if len(raw_list) == 128:
-                try:
-                    # 1. 특징 추출 (9개 값)
-                    features = extract_features(raw_list)
-                    feature_vector = np.array(features).reshape(1, -1)
-                    
-                    # 2. 모델 예측
-                    pred = self.model.predict(feature_vector)[0]
-                    self.prediction_buffer.append(pred)
-                    
-                    # 3. 다수결 투표 (Smoothing)
-                    if len(self.prediction_buffer) >= 5:
-                        counts = Counter(self.prediction_buffer)
-                        final_decision = counts.most_common(1)[0][0]
-                        confidence = counts[final_decision] / len(self.prediction_buffer) * 100
-                        
-                        if final_decision == 0:
-                            self.status_label.setText(f"🛸 HOVER (공중)  [{confidence:.0f}%]")
-                            self.status_label.setStyleSheet("background-color: #008800; color: white; font-size: 32px; font-weight: bold; border: 4px solid white;")
-                        else:
-                            self.status_label.setText(f"🧱 WALL (벽 감지!)  [{confidence:.0f}%]")
-                            self.status_label.setStyleSheet("background-color: #DD0000; color: white; font-size: 32px; font-weight: bold; border: 4px solid yellow;")
-
-                except Exception as e:
-                    print(f"Pred Error: {e}")
-
         # ==========================================
         # 그래프 업데이트 (시각화)
         # ==========================================
+        global latest_raw_data
         # Phase
         last_phase = np.angle(csi_data_complex[-1])
-        # 유효한 서브캐리어만 그림 (128개라고 가정)
-        valid_len = len(latest_raw_data) if latest_raw_data else 0
+        # 유효한 서브캐리어만 그림 (I/Q 128 -> complex 64)
+        valid_len = 0
+        if latest_raw_data:
+            try:
+                valid_len = int(len(latest_raw_data) // 2) if (len(latest_raw_data) % 2 == 0) else 0
+            except Exception:
+                valid_len = 0
         if valid_len > 0:
             self.curve_phase.setData(last_phase[:valid_len])
 
@@ -182,8 +187,10 @@ class csi_data_graphical_window(QWidget):
 
 
 # --- 시리얼 통신 스레드 ---
-def csi_reader(port, csv_writer, log_file, callback_color):
+def csi_reader(port, csv_writer, callback_color, pred_signal, model, cfg: TSCNNConfig, device: torch.device):
     global latest_raw_data, csi_data_complex
+    frame_buffer = deque(maxlen=cfg.window_size)
+    pred_streak = deque(maxlen=3)  # 최근 3번 예측 결과가 모두 Wall(1)일 때만 경고
     
     try:
         ser = serial.Serial(port, 921600, timeout=1)
@@ -231,6 +238,46 @@ def csi_reader(port, csv_writer, log_file, callback_color):
                     else: cols.append((0,0,255))
                 callback_color.emit(cols)
 
+            # ==========================================
+            # [핵심] Time-Series 1D-CNN 실시간 추론 (Stride=1)
+            # ==========================================
+            if csi_len == cfg.iq_len:
+                amp64 = iq128_to_amp64(raw_data)
+                if amp64 is not None:
+                    frame_buffer.append(amp64)
+
+                    # 버퍼 워밍업 상태 전달
+                    if len(frame_buffer) < cfg.window_size:
+                        pred_signal.emit(
+                            {
+                                "warming_up": True,
+                                "buffer_len": len(frame_buffer),
+                                "window_size": cfg.window_size,
+                            }
+                        )
+                    else:
+                        # 입력 텐서: (1,64,20)
+                        window = np.stack(frame_buffer, axis=0).T.astype(np.float32)
+                        x = torch.from_numpy(window).unsqueeze(0).to(device).float()
+                        with torch.no_grad():
+                            logits = model(x)
+                            probs = torch.softmax(logits, dim=1)[0].detach().cpu().numpy()
+                            pred = int(np.argmax(probs))
+                            wall_prob = float(probs[1])
+
+                        pred_streak.append(pred)
+                        wall_warning = (len(pred_streak) == 3) and all(p == 1 for p in pred_streak)
+
+                        pred_signal.emit(
+                            {
+                                "buffer_len": len(frame_buffer),
+                                "window_size": cfg.window_size,
+                                "pred": pred,
+                                "wall_prob": wall_prob,
+                                "wall_warning": wall_warning,
+                            }
+                        )
+
             # 저장
             csv_writer.writerow(row)
 
@@ -240,31 +287,50 @@ def csi_reader(port, csv_writer, log_file, callback_color):
 
 class SerialThread(QThread):
     color_signal = pyqtSignal(object)
+    model_signal = pyqtSignal(object)
+    pred_signal = pyqtSignal(object)
     
-    def __init__(self, port, store, log):
+    def __init__(self, port, store, log, model_path: str, device: str):
         super().__init__()
         self.port = port
         self.store = store
         self.log = log
+        self.model_path = model_path
+        self.device = device
     
     def run(self):
+        # 모델 로드 (실패하면 UI에 알리고 종료)
+        try:
+            if self.device == "cuda" and not torch.cuda.is_available():
+                raise RuntimeError("CUDA를 요청했지만 torch.cuda.is_available()=False 입니다. --device cpu로 실행하세요.")
+            model, cfg, _ = load_tscnn_checkpoint(self.model_path, device=self.device)
+            device = torch.device(self.device)
+            self.model_signal.emit({"ok": True, "model_path": self.model_path, "cfg": cfg.__dict__})
+        except Exception as e:
+            self.model_signal.emit({"ok": False, "model_path": self.model_path, "error": str(e)})
+            return
+
         with open(self.store, 'w', newline='') as f1, open(self.log, 'w') as f2:
             writer = csv.writer(f1)
             writer.writerow(DATA_COLUMNS_NAMES)
-            csi_reader(self.port, writer, f2, self.color_signal)
+            csi_reader(self.port, writer, self.color_signal, self.pred_signal, model, cfg, device)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-p', '--port', required=True)
     parser.add_argument('-s', '--store', default='csi_data.csv')
     parser.add_argument('-l', '--log', default='csi_log.txt')
+    parser.add_argument('-m', '--model', default='csi_model_tscnn.pt')
+    parser.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu', choices=['cpu', 'cuda'])
     args = parser.parse_args()
 
     app = QApplication(sys.argv)
     
     win = csi_data_graphical_window()
-    t = SerialThread(args.port, args.store, args.log)
+    t = SerialThread(args.port, args.store, args.log, args.model, args.device)
     t.color_signal.connect(win.update_colors)
+    t.model_signal.connect(win.on_model_status)
+    t.pred_signal.connect(win.on_prediction)
     t.start()
     
     win.show()
